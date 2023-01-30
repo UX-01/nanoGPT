@@ -31,9 +31,3 @@ Tokenizer Schemas
 
 - Google created SentencePiece, which is an unsupervised text tokenizer and detokenizer mainly for Nueral Network-based text generation systems where the vocabulary size is predetermined prior to the neural model training.
 - OpenAI created tiktoken, which is a fast BPE tokeniser for use wtih OpenAI's models.
-
-
-
-
-
-
