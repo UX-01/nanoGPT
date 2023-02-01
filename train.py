@@ -94,11 +94,50 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(v_size, v_size)
 
-    def forward(self, idx, targets):
+    def forward(self, idx, targets=None):
         logits = self.token_embedding_table(idx)
+        
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+        return logits, loss
 
-        return logits
+    def generate(self, idx, max_new_tokens):
+        """ Generate function for the model """
+        for _ in range(max_new_tokens):
+            logits, loss = self(idx)
+            logits = logits[:, -1, :]
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
 
 m = BigramLanguageModel(v_size)
 out = m(xb, yb)
-print(out.shape)
+logits, loss = m(xb, yb)
+
+print(logits.shape)
+print(loss)
+print('Generated: ',decode(m.generate(torch.zeros((1, 1), dtype=torch.long), max_new_tokens=100)[0].tolist()))
+
+# Create PyTorch optimizer
+optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
+
+batch_size = 32
+
+for steps in range(10000):
+    xb, yb = get_batch('train')
+
+    logits, loss = m(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+
+    print(loss.item())
+
+print('Generated: ',decode(m.generate(torch.zeros((1, 1), dtype=torch.long), max_new_tokens=300)[0].tolist()))
