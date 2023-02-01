@@ -1,3 +1,7 @@
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -82,8 +86,19 @@ for b in range(batch_size):
         target = yb[b, t]
         print(f"When input is {ctx.tolist()} the target: {target}")
 
+torch.manual_seed(1337)
 
+class BigramLanguageModel(nn.Module):
 
+    def __init__(self, v_size):
+        super().__init__()
+        self.token_embedding_table = nn.Embedding(v_size, v_size)
 
+    def forward(self, idx, targets):
+        logits = self.token_embedding_table(idx)
 
+        return logits
 
+m = BigramLanguageModel(v_size)
+out = m(xb, yb)
+print(out.shape)
