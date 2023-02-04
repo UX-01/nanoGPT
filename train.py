@@ -5,9 +5,9 @@ from torch.nn import functional as F
 # Hyper-parameters
 batch_size = 32
 block_size = 8
-max_iters = 3000
+max_iters = 5000
 eval_interval = 300
-learning_rate = 1e-2
+learning_rate = 1e-3
 
 # Use a CUDA GPU if available
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -63,6 +63,34 @@ print(wei)
 wei = F.softmax(wei, dim=-1)
 print(wei)
 
+# Self-attention
+torch.manual_seed(1337)
+
+# batch, time and channels
+B, T, C = 4, 8, 32
+x = torch.randn(B, T, C)
+head_size = 16
+key = nn.Linear(C, head_size, bias=False)
+query = nn.Linear(C, head_size, bias=False)
+k = key(x)
+q = query(x)
+value = nn.Linear(C, head_size, bias=False)
+
+# Transpose the B/T dimensions
+wei = q @ k.transpose(-2, -1)
+print(wei)
+tril = torch.tril(torch.ones(T, T))
+wei = torch.zeros((T, T))
+wei = wei.masked_fill(tril == 0, float('-inf'))
+wei = F.softmax(wei, dim=1)
+v = value(x)
+o = wei @ v
+o.shape
+
+k = torch.randn(B, T, head_size)
+q = torch.randn(B, T, head_size)
+wei = q @ k.transpose(-2, -1) * head_size ** -0.5
+
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -106,13 +134,11 @@ def estimate_loss():
     return out
 
 class BigramLanguageModel(nn.Module):
-
     def __init__(self,):
         super().__init__()
         self.token_embedding_table = nn.Embedding(v_size, n_embed)
         self.position_embedding_table =  nn.Embedding(block_size, n_embed)
         self.lm_head = nn.Linear(n_embed, v_size)
-
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -134,12 +160,12 @@ class BigramLanguageModel(nn.Module):
     def generate(self, idx, max_new_tokens):
         """ Generate function for the model """
         for _ in range(max_new_tokens):
-            logits, loss = self(idx)
+            idx_cond = idx[:, -block_size:]
+            logits, loss = self(idx_cond)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
-
         return idx
 
 model = BigramLanguageModel()
