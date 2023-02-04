@@ -2,100 +2,125 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+# Hyper-parameters
+batch_size = 32
+block_size = 8
+max_iters = 3000
+eval_interval = 300
+learning_rate = 1e-2
+
+# Use a CUDA GPU if available
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+eval_iters = 200
+n_embed = 32
+
+torch.manual_seed(1337)
+B, T, C = 4,8,2
+x = torch.rand(B, T, C)
+x.shape
+
+torch.Size([4, 8, 2])
+# Averaging a bag of words in an unoptmized way
+xbow = torch.zeros((B, T, C))
+for b in range(B):
+  for t in range(T):
+    xprev = x[b,:+1]
+    xbow[b,t] = torch.mean(xprev, 0)
+
+# Mathematical trick of using matrix multiplication
+# Deposit sums into variable c
+torch.manual_seed(42)
+a = torch.ones(3, 3)
+a = a / torch.sum(a, 1, keepdim=True)
+b = torch.randint(0,10,(3,2)).float()
+c = a @ b
+print('--')
+print(a)
+print('--')
+print('b=')
+print(b)
+print('--')
+print('c=')
+print(c)
+
+wei = torch.tril(torch.ones(T, T))
+wei = wei / wei.sum(1, keepdim=True)
+xbow2 = wei @ x # (B, T, T) @ (B, T, C)
+torch.allclose(xbow, xbow2)
+
+# Use Softmax instead
+tril = torch.tril(torch.ones(T, T))
+wei = torch.zeros((T, T))
+wei = wei.masked_fill(tril == 0, float('-inf'))
+wei = F.softmax(wei, dim=-1)
+xbow3 = wei @ x
+torch.allclose(xbow, xbow3)
+
+wei = torch.zeros((T, T))
+print(wei)
+wei = wei.masked_fill(tril == 0, float('-inf'))
+print(wei)
+wei = F.softmax(wei, dim=-1)
+print(wei)
+
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
-
-print("Length of dataset in chars: ", len(text))
-print(text[:1000])
-
 
 # Get a set of all the characters in the text, and call list on it and then sort.
 chars = sorted(list(set(text)))
 v_size = len(chars)
 
-print(''.join(chars))
-print(v_size)
-
 # Create a mapping from characters to integers
 stoi = { ch:i for i,ch in enumerate(chars) }
 itos = { i:ch for i,ch in enumerate(chars) }
-
-# Encoder: take a str, output a list of ints
 encode = lambda s: [stoi[c] for c in s]
-
-# Decoder: take a list of ints, and outpu ta list of str
 decode = lambda l: ''.join([itos[i] for i in l])
 
-print(encode("inserting text from nanoGPT"))
-print(decode(encode("insert head exploding emoji")))
-
 # Encode the entire text dataset and store it into a torch.Tensor
-import torch
 data = torch.tensor(encode(text), dtype=torch.long)
-print(data.shape, data.dtype)
-print(data[:1000])
-
-# Split the data into train and validation sets
-# In other words, take the first 90% of data and define it 
-# as training data then take the remaining 10 and use it as 
-# validation data.
 n = int(0.9*len(data))
-
 train_data = data[:n]
 value_data = data[n:]
 
-block_size = 8
-train_data[:block_size+1]
-
-x = train_data[:block_size]
-y = train_data[1:block_size+1]
-
-for t in range(block_size):
-    ctx = x[:t+1]
-    target = y[t]
-    print(f"When input is {ctx} the target: {target}")
-
-torch.manual_seed(1337)
-# The number of independent sequences that we'd like processed in parallel
-batch_size = 4
-
-# The maximum context length for predictions
-block_size = 8
-
+# Data loading
 def get_batch(split):
-    # Generate a small batch of data of inputs x and targets y
+    """Generate a small batch of data of inputs x and targets y"""
     data = train_data if split == 'train' else value_data
     ix = torch.randint(len(data) - block_size, (batch_size, ))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     return x, y
 
-xb, yb = get_batch('Train')
-print('Inputs: ')
-print(xb.shape)
-print(xb)
-print('Targets: ')
-print(yb.shape)
-print(yb)
-print('----')
-
-# Batch and time dimensions
-for b in range(batch_size):
-    for t in range(block_size):
-        ctx = xb[b, :t+1]
-        target = yb[b, t]
-        print(f"When input is {ctx.tolist()} the target: {target}")
-
-torch.manual_seed(1337)
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
 class BigramLanguageModel(nn.Module):
 
-    def __init__(self, v_size):
+    def __init__(self,):
         super().__init__()
-        self.token_embedding_table = nn.Embedding(v_size, v_size)
+        self.token_embedding_table = nn.Embedding(v_size, n_embed)
+        self.position_embedding_table =  nn.Embedding(block_size, n_embed)
+        self.lm_head = nn.Linear(n_embed, v_size)
+
 
     def forward(self, idx, targets=None):
-        logits = self.token_embedding_table(idx)
+        B, T = idx.shape
+        # idx and targets are both (B, T) tensor of ints
+        token_embedding = self.token_embedding_table(idx)
+        position_embedding = self.position_embedding_table(torch.arange(T, device=device))
+        x = token_embedding + position_embedding
+        logits = self.lm_head(x)
         
         if targets is None:
             loss = None
@@ -117,27 +142,22 @@ class BigramLanguageModel(nn.Module):
 
         return idx
 
-m = BigramLanguageModel(v_size)
-out = m(xb, yb)
-logits, loss = m(xb, yb)
-
-print(logits.shape)
-print(loss)
-print('Generated: ',decode(m.generate(torch.zeros((1, 1), dtype=torch.long), max_new_tokens=100)[0].tolist()))
+model = BigramLanguageModel()
+m = model.to(device)
 
 # Create PyTorch optimizer
-optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
+optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
-batch_size = 32
+for iter in range(max_iters):
+    if iter % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"Step {iter}: train loss {losses['train']:.4f}, value loss {losses['val']:.4f}")
 
-for steps in range(10000):
     xb, yb = get_batch('train')
-
-    logits, loss = m(xb, yb)
+    logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
-    print(loss.item())
-
-print('Generated: ',decode(m.generate(torch.zeros((1, 1), dtype=torch.long), max_new_tokens=300)[0].tolist()))
+context = torch.zeros((1, 1), dtype=torch.long, device=device)
+print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
