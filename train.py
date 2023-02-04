@@ -6,13 +6,15 @@ from torch.nn import functional as F
 batch_size = 32
 block_size = 8
 max_iters = 5000
-eval_interval = 300
-learning_rate = 1e-3
-
+eval_interval = 500
+learning_rate = 3e-4
 # Use a CUDA GPU if available
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embed = 32
+n_embed = 384
+n_layer = 6
+n_head = 6
+dropout = 0.2
 
 torch.manual_seed(1337)
 B, T, C = 4,8,2
@@ -133,6 +135,28 @@ def estimate_loss():
     model.train()
     return out
 
+class Head(nn.Module):
+  """ Single head of self-attention like my penis """
+  def __init__(self, head_size):
+    super().__init__()
+    self.key = nn.Linear(n_embed, head_size, bias=False)
+    self.query = nn.Linear(n_embed, head_size, bias=False)
+    self.value = nn.Linear(n_embed, head_size, bias=False)
+    self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+    self.dropout = nn.Dropout(dropout)
+
+  def forward(self, x):
+    B, T, C = x.shape
+    k = self.key(x)
+    q = self.query(x)
+    wei = q @ k.transpose(-2, -1) * C**-0.5
+    wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+    wei = F.softmax(wei, dim=-1)
+    wei = self.dropout(wei)
+    v = self.value(wei)
+    out = wei @ v
+    return out
+
 class BatchNorm1d:
   def __init__(self, dim, eps=1e-5, momentum=0.1):
     self.eps = eps
@@ -161,11 +185,13 @@ class MultiHeadAttention(nn.Module):
     super().__init__()
     self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
     self.proj = nn.Linear(n_embed, n_embed)
+    self.dropout = nn.Dropout(dropout)
 
   def forward(self, x):
     # return torch.cat([h(x) for h in self.heads], dim=-1)
     out = torch.cat([h(x) for h in self.heads], dim=-1)
     out = self.proj(out)
+
     return out
 
 class FeedForward(nn.Module):
@@ -176,7 +202,7 @@ class FeedForward(nn.Module):
       nn.Linear(n_embed, 4 * n_embed),
       nn.ReLU(),
       nn.Linear(4 * n_embed, n_embed),
-
+      nn.Dropout(dropout),
     )
 
   def forward(self, x):
@@ -202,16 +228,19 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(v_size, n_embed)
         self.position_embedding_table =  nn.Embedding(block_size, n_embed)
+        self.blocks = nn.Sequential(* [Block(n_embed, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embed)
+        self.lm_head = nn.Linear(n_embed, v_size)
         # 4 heads of 8 dimensional self-attention
-        self.blocks = nn.Sequential(
-          Block(n_embed, n_head=4),
-          Block(n_embed, n_head=4),
-          Block(n_embed, n_head=4),
-          nn.LayerNorm(n_embed),
-        )
+        # self.blocks = nn.Sequential(
+        #   Block(n_embed, n_head=4),
+        #   Block(n_embed, n_head=4),
+        #   Block(n_embed, n_head=4),
+        #   nn.LayerNorm(n_embed),
+        # )
         # self.sa_heads = MultiHeadAttention(4, n_embed // 4)
         # self.ffwd = FeedForward(n_embed)
-        self.lm_head = nn.Linear(n_embed, v_size)
+        # self.lm_head = nn.Linear(n_embed, v_size)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
